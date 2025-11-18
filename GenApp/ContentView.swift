@@ -8,14 +8,13 @@
 import SwiftUI
 
 struct ContentView: View {
+    @StateObject private var authService = AuthenticationService()
+    @StateObject private var theme = AppTheme()
+    
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
-        }
-        .padding()
+        // For testing: Always show main app (mock user is auto-created)
+        MainTabView(authService: authService, theme: theme)
+            .preferredColorScheme(theme.colorScheme)
     }
 }
 
