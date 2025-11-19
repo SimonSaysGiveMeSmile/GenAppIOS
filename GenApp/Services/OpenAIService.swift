@@ -12,6 +12,7 @@ import Foundation
 /// while ensuring the entire app remains front-end only.
 class OpenAIService {
     private let responseGenerator = LocalResponseGenerator()
+    private let toolResponseGenerator = LocalToolResponseGenerator()
     
     func sendMessage(messages: [ChatMessage]) async throws -> String {
         guard let lastUserMessage = messages.last(where: { $0.role == .user }) else {
@@ -24,6 +25,11 @@ class OpenAIService {
             for: lastUserMessage.content,
             contextCount: messages.count
         )
+    }
+    
+    func invokeTool(_ tool: OpenAITool, payload: String, contextSize: Int) async throws -> ToolInvocationResult {
+        try await Task.sleep(nanoseconds: 200_000_000)
+        return toolResponseGenerator.generateResult(for: tool, payload: payload, contextSize: contextSize)
     }
 }
 
@@ -112,6 +118,35 @@ I’ll stitch together ready-to-preview HTML/CSS/JS plus SwiftUI stubs, then sur
         }
         
         return interactions.joined(separator: ", ")
+    }
+}
+
+// MARK: - Tool Call Responses
+private struct LocalToolResponseGenerator {
+    func generateResult(for tool: OpenAITool, payload: String, contextSize: Int) -> ToolInvocationResult {
+        switch tool {
+        case .promptCompression:
+            let tokens = min(max(payload.split(separator: " ").count / 4, 3), 12)
+            return ToolInvocationResult(
+                summary: "Condensed prompt into \(tokens) key intents for downstream tools.",
+                suggestedNextStep: "layout-planning"
+            )
+        case .layoutPlanner:
+            return ToolInvocationResult(
+                summary: "Outlined flexible layout with \(max(contextSize, 1)) sections and responsive spacing.",
+                suggestedNextStep: "component-builder"
+            )
+        case .componentBuilder:
+            return ToolInvocationResult(
+                summary: "Expanded layout into interactive components with mocked data bindings.",
+                suggestedNextStep: "runtime-bootstrap"
+            )
+        case .runtimeBootstrap:
+            return ToolInvocationResult(
+                summary: "Stitched HTML/CSS/JS bundle for local WKWebView runtime.",
+                suggestedNextStep: "complete"
+            )
+        }
     }
 }
 

@@ -22,6 +22,7 @@ class ChatViewModel: ObservableObject {
     @Published var showSavePrompt = false
     @Published var builtApp: GeneratedApp?
     @Published var showAppPreview = false
+    @Published var toolCallHistory: [ToolCallSummary] = []
     
     private let openAIService: OpenAIService
     private let intentService: IntentRecognitionService
@@ -30,12 +31,6 @@ class ChatViewModel: ObservableObject {
     private let userId: String?
     let onAppGenerated: ((AppDesign) -> Void)?
     let runtimeService: AppRuntimeService
-    
-    private static let logFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter
-    }()
     
     init(openAIService: OpenAIService, appBuilderOrchestrator: AppBuilderOrchestrator, storageService: StorageService? = nil, userId: String? = nil, onAppGenerated: ((AppDesign) -> Void)? = nil) {
         self.openAIService = openAIService
@@ -53,7 +48,6 @@ class ChatViewModel: ObservableObject {
         let userMessage = ChatMessage(role: .user, content: inputText)
         let messageText = inputText
         messages.append(userMessage)
-        appendBackendLog("User prompt received (\(messageText.count) chars)")
         
         inputText = ""
         isLoading = true
@@ -64,7 +58,6 @@ class ChatViewModel: ObservableObject {
             // First, recognize intent
             let intent = await intentService.recognizeIntent(from: messageText)
             detectedIntent = intent
-            appendBackendLog("Intent detected: \(intent.summary)")
             
             switch intent {
             case .buildApp(let description, let requirements):
@@ -85,10 +78,10 @@ class ChatViewModel: ObservableObject {
     }
     
     private func buildAppFromDescription(description: String, requirements: [String]) async {
+        toolCallHistory.removeAll()
         isBuildingApp = true
         buildProgress = 0.05
         buildStatusMessage = "Analyzing your requirements..."
-        appendBackendLog("Starting build pipeline with \(requirements.count) requirements")
         builtApp = nil
         showAppPreview = false
         showSavePrompt = false
@@ -111,30 +104,28 @@ class ChatViewModel: ObservableObject {
             buildProgress = 0.1
             buildStatusMessage = "Extracting app requirements..."
             await Task.yield()
+            await invokeTool(.promptCompression, payload: description)
             
             buildProgress = 0.15
             buildStatusMessage = "Designing app structure with AI..."
+            await invokeTool(.layoutPlanner, payload: requirements.joined(separator: "; "))
             let design = try await intentService.generateAppDesign(from: description, requirements: requirements)
             generatedAppDesign = design
             buildStatusMessage = "App design created ✓"
-            appendBackendLog("Design generated: \(design.name) with \(design.rootComponent.children.count) components")
+            await invokeTool(.componentBuilder, payload: "\(design.name) • \(design.rootComponent.children.count) components")
             
             // Step 2: Run full build cycle
             buildProgress = 0.2
             buildStatusMessage = "Starting build process..."
-            appendBackendLog("Running local builder orchestration")
             await appBuilderOrchestrator.runFullCycle(design: design, autoDebug: true)
             
             if let generated = appBuilderOrchestrator.generatedApp {
                 builtApp = generated
-                appendBackendLog("Runtime artifacts ready for preview")
                 showAppPreview = true
-            } else {
-                appendBackendLog("Build completed but runtime artifact missing from orchestrator")
+                await invokeTool(.runtimeBootstrap, payload: generated.name)
             }
             buildProgress = 1.0
             buildStatusMessage = "Build complete! ✓"
-            appendBackendLog("Build finished successfully")
             
             // Step 3: Show save prompt
             showSavePrompt = true
@@ -150,7 +141,6 @@ class ChatViewModel: ObservableObject {
         } catch {
             errorMessage = "Failed to build app: \(error.localizedDescription)"
             buildStatusMessage = "Build failed: \(error.localizedDescription)"
-            appendBackendLog("Build failed: \(error.localizedDescription)")
             let errorMsg = ChatMessage(
                 role: .assistant,
                 content: "I encountered an error while building your app: \(error.localizedDescription). Let me try again with a simpler design."
@@ -182,20 +172,16 @@ class ChatViewModel: ObservableObject {
     
     private func handleAppModification(appId: String?, changes: String) async {
         // For now, treat as regular chat
-        appendBackendLog("Modification intent detected (appId: \(appId ?? "n/a")) – falling back to chat")
         await sendRegularMessage()
     }
     
     private func sendRegularMessage() async {
         do {
-            appendBackendLog("Generating lightweight response using local AI engine")
             let response = try await openAIService.sendMessage(messages: messages)
             let assistantMessage = ChatMessage(role: .assistant, content: response)
             messages.append(assistantMessage)
-            appendBackendLog("Response delivered to chat")
         } catch {
             errorMessage = error.localizedDescription
-            appendBackendLog("Response generation failed: \(error.localizedDescription)")
             let errorMsg = ChatMessage(
                 role: .assistant,
                 content: "I'm sorry, I encountered an error: \(error.localizedDescription)"
@@ -244,7 +230,6 @@ class ChatViewModel: ObservableObject {
         
         showSavePrompt = false
         generatedAppDesign = nil
-        appendBackendLog("Saved \(design.name) to local storage")
         
         // Add confirmation message
         let confirmMessage = ChatMessage(
@@ -262,7 +247,6 @@ class ChatViewModel: ObservableObject {
     func openPreview() {
         guard builtApp != nil else { return }
         showAppPreview = true
-        appendBackendLog("Opening local runtime preview")
     }
     
     func dismissPreview() {
@@ -276,14 +260,47 @@ class ChatViewModel: ObservableObject {
         showSavePrompt = false
         builtApp = nil
         showAppPreview = false
-        appendBackendLog("Backend logs reset")
+        toolCallHistory.removeAll()
     }
     
-    private func appendBackendLog(_ text: String) {
-        let timestamp = ChatViewModel.logFormatter.string(from: Date())
-        let content = "[\(timestamp)] \(text)"
-        let logMessage = ChatMessage(role: .log, content: content)
-        messages.append(logMessage)
+    @discardableResult
+    private func invokeTool(_ tool: OpenAITool, payload: String) async -> ToolCallSummary {
+        var toolCall = ToolCallSummary(tool: tool, inputPreview: payload.truncated(80))
+        let startTime = Date()
+        
+        await MainActor.run {
+            toolCall.status = .running
+            toolCallHistory.append(toolCall)
+        }
+        
+        do {
+            let result = try await openAIService.invokeTool(tool, payload: payload, contextSize: messages.count)
+            let duration = Date().timeIntervalSince(startTime)
+            await MainActor.run {
+                if let index = toolCallHistory.firstIndex(where: { $0.id == toolCall.id }) {
+                    toolCallHistory[index].status = .completed
+                    toolCallHistory[index].outputSummary = result.summary
+                    toolCallHistory[index].duration = duration
+                }
+            }
+        } catch {
+            await MainActor.run {
+                if let index = toolCallHistory.firstIndex(where: { $0.id == toolCall.id }) {
+                    toolCallHistory[index].status = .failed
+                    toolCallHistory[index].outputSummary = error.localizedDescription
+                }
+            }
+        }
+        
+        return toolCall
+    }
+}
+
+private extension String {
+    func truncated(_ maxCount: Int) -> String {
+        guard count > maxCount else { return self }
+        let prefixText = prefix(maxCount).trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(prefixText)…"
     }
 }
 

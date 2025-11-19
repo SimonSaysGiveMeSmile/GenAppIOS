@@ -46,6 +46,11 @@ struct ChatView: View {
                                         viewModel.buildStatusMessage
                                 )
                                 .padding(.vertical)
+                                
+                                if !viewModel.toolCallHistory.isEmpty {
+                                    ToolCallStackView(theme: theme, toolCalls: viewModel.toolCallHistory)
+                                        .padding(.bottom, 8)
+                                }
                             } else if viewModel.builtApp != nil {
                                 PreviewCTAView(
                                     theme: theme,

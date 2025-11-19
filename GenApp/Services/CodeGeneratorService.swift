@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import CoreGraphics
 
 class CodeGeneratorService {
     
@@ -127,25 +128,25 @@ class CodeGeneratorService {
         // Layout
         css += "\(selector) {\n"
         css += "  position: relative;\n"
-        css += "  width: \(component.layout.width)px;\n"
-        css += "  height: \(component.layout.height)px;\n"
-        css += "  padding: \(component.layout.padding.top)px \(component.layout.padding.trailing)px \(component.layout.padding.bottom)px \(component.layout.padding.leading)px;\n"
-        css += "  margin: \(component.layout.margin.top)px \(component.layout.margin.trailing)px \(component.layout.margin.bottom)px \(component.layout.margin.leading)px;\n"
+        css += "  width: \(safe(component.layout.width, fallback: 320))px;\n"
+        css += "  height: \(safe(component.layout.height, fallback: 48))px;\n"
+        css += "  padding: \(safe(component.layout.padding.top, fallback: 0))px \(safe(component.layout.padding.trailing, fallback: 0))px \(safe(component.layout.padding.bottom, fallback: 0))px \(safe(component.layout.padding.leading, fallback: 0))px;\n"
+        css += "  margin: \(safe(component.layout.margin.top, fallback: 0))px \(safe(component.layout.margin.trailing, fallback: 0))px \(safe(component.layout.margin.bottom, fallback: 12))px \(safe(component.layout.margin.leading, fallback: 0))px;\n"
         
         // Style
         css += "  background-color: \(component.style.backgroundColor);\n"
         css += "  color: \(component.style.textColor);\n"
-        css += "  font-size: \(component.style.fontSize)px;\n"
+        css += "  font-size: \(safe(component.style.fontSize, fallback: 16))px;\n"
         css += "  font-weight: \(component.style.fontWeight);\n"
         if component.style.fontFamily != "system" {
             css += "  font-family: \(component.style.fontFamily);\n"
         }
-        css += "  border-radius: \(component.style.borderRadius)px;\n"
-        css += "  border: \(component.style.borderWidth)px solid \(component.style.borderColor);\n"
-        css += "  opacity: \(component.style.opacity);\n"
+        css += "  border-radius: \(safe(component.style.borderRadius, fallback: 0))px;\n"
+        css += "  border: \(safe(component.style.borderWidth, fallback: 0))px solid \(component.style.borderColor);\n"
+        css += "  opacity: \(safe(component.style.opacity, fallback: 1.0));\n"
         
         if let shadow = component.style.shadow {
-            css += "  box-shadow: \(shadow.offsetX)px \(shadow.offsetY)px \(shadow.radius)px \(shadow.color);\n"
+            css += "  box-shadow: \(safe(shadow.offsetX, fallback: 0))px \(safe(shadow.offsetY, fallback: 0))px \(safe(shadow.radius, fallback: 4))px \(shadow.color);\n"
         }
         
         css += "}\n\n"
@@ -231,6 +232,16 @@ class CodeGeneratorService {
         
         return js
     }
+}
+
+// MARK: - Helpers
+private func safe(_ value: Double, fallback: Double) -> Double {
+    value.isFinite ? value : fallback
+}
+
+private func safe(_ value: CGFloat, fallback: Double) -> Double {
+    let doubleValue = Double(value)
+    return doubleValue.isFinite ? doubleValue : fallback
 }
 
 // MARK: - Generated App
