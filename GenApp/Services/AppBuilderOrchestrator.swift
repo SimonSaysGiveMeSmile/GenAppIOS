@@ -11,7 +11,7 @@ import Combine
 @MainActor
 class AppBuilderOrchestrator: ObservableObject {
     @Published var currentDesign: AppDesign?
-    @Published var generatedApp: GeneratedApp?
+    @Published var generatedMiniApp: MiniAppSpec?
     @Published var validationResult: ValidationResult?
     @Published var isBuilding = false
     @Published var buildProgress: Double = 0.0
@@ -30,7 +30,7 @@ class AppBuilderOrchestrator: ObservableObject {
         case failed
     }
     
-    private let codeGenerator = CodeGeneratorService()
+    private let dslAdapter = MiniAppDSLAdapter()
     private let validator = AppValidatorService()
     let runtimeService: AppRuntimeService
     private let debugService: SelfDebugService
@@ -87,32 +87,24 @@ class AppBuilderOrchestrator: ObservableObject {
         
         currentDesign = finalDesign
         
-        // Step 3: Generate Code
+        // Step 3: Compile MiniApp spec
         buildStatus = .generating
         buildProgress = 0.5
-        detailedStatus = "Generating HTML structure..."
+        detailedStatus = "Compiling MiniApp DSL..."
         await Task.yield()
         
-        buildProgress = 0.6
-        detailedStatus = "Generating CSS styles..."
-        await Task.yield()
+        let spec = dslAdapter.convert(design: finalDesign)
+        generatedMiniApp = spec
         
-        buildProgress = 0.7
-        detailedStatus = "Generating JavaScript logic..."
-        let generated = codeGenerator.generateApp(from: finalDesign)
-        generatedApp = generated
-        detailedStatus = "Code generation complete ✓"
-        
-        // Step 4: Validate Generated Code
-        buildProgress = 0.8
-        detailedStatus = "Preparing app runtime..."
-        await Task.yield()
+        // Step 4: Prepare runtime
+        buildProgress = 0.75
+        detailedStatus = "Bootstrapping MiniApp runtime..."
+        runtimeService.load(spec: spec)
         
         // Step 5: Run App
         buildStatus = .running
         buildProgress = 0.9
-        detailedStatus = "Launching app..."
-        runtimeService.runApp(generated)
+        detailedStatus = "Launching MiniApp..."
         
         buildStatus = .completed
         buildProgress = 1.0
@@ -126,13 +118,19 @@ class AppBuilderOrchestrator: ObservableObject {
         validationResult = validator.validate(design)
     }
     
-    func generateCode(from design: AppDesign) {
-        generatedApp = codeGenerator.generateApp(from: design)
+    func generateMiniApp(from design: AppDesign) {
+        let spec = dslAdapter.convert(design: design)
+        generatedMiniApp = spec
+        runtimeService.load(spec: spec)
     }
     
-    func runApp(_ app: GeneratedApp) {
-        runtimeService.runApp(app)
-        buildStatus = .running
+    // MARK: - Direct MiniAppSpec Loading
+    func loadMiniAppSpec(_ spec: MiniAppSpec) {
+        generatedMiniApp = spec
+        runtimeService.load(spec: spec)
+        buildStatus = .completed
+        buildProgress = 1.0
+        detailedStatus = "MiniApp loaded and ready! ✓"
     }
     
     func debugAndRetry() async {
@@ -169,7 +167,7 @@ class AppBuilderOrchestrator: ObservableObject {
     
     func reset() {
         currentDesign = nil
-        generatedApp = nil
+        generatedMiniApp = nil
         validationResult = nil
         buildStatus = .idle
         buildProgress = 0.0

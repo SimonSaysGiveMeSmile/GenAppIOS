@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import SwiftUI
 
 enum UserIntent {
     case buildApp(description: String, requirements: [String])
@@ -22,15 +23,43 @@ class IntentRecognitionService {
     func recognizeIntent(from message: String) async -> UserIntent {
         let lowercased = message.lowercased()
         
-        let buildKeywords = ["build", "create", "make", "design", "app", "application", "website", "web app"]
-        let hasBuildIntent = buildKeywords.contains { lowercased.contains($0) }
+        // Enhanced app creation keywords - detect various ways users might request an app
+        let buildKeywords = [
+            "build", "create", "make", "design", "app", "application", "website", "web app",
+            "need", "want", "looking for", "i need", "i want", "can you make", "can you create",
+            "generate", "build me", "make me", "create me", "i'd like", "i would like",
+            "tracker", "manager", "dashboard", "tool", "utility"
+        ]
         
-        if hasBuildIntent {
+        // Check for app-related nouns that suggest app creation
+        let appTypeKeywords = [
+            "habit tracker", "todo", "task", "reminder", "calendar", "note", "journal",
+            "weather", "clock", "timer", "stopwatch", "calculator", "budget", "expense",
+            "fitness", "workout", "recipe", "shopping", "list", "planner", "schedule"
+        ]
+        
+        let hasBuildKeyword = buildKeywords.contains { lowercased.contains($0) }
+        let hasAppType = appTypeKeywords.contains { lowercased.contains($0) }
+        
+        // If message contains app creation keywords OR app type keywords, treat as build intent
+        // Also check for patterns like "I need a [app type]" or "Can you make a [app type]"
+        let buildPatterns = [
+            "i need a", "i need an", "i want a", "i want an",
+            "can you make a", "can you make an", "can you create a", "can you create an",
+            "can you build a", "can you build an", "build me a", "build me an",
+            "create me a", "create me an", "make me a", "make me an"
+        ]
+        
+        let hasBuildPattern = buildPatterns.contains { pattern in
+            lowercased.contains(pattern)
+        }
+        
+        if hasBuildKeyword || hasAppType || hasBuildPattern {
             let requirements = await extractRequirements(from: message)
             return .buildApp(description: message, requirements: requirements)
         }
         
-        let modifyKeywords = ["modify", "change", "update", "edit", "fix", "improve"]
+        let modifyKeywords = ["modify", "change", "update", "edit", "fix", "improve", "adjust", "refine"]
         if modifyKeywords.contains(where: { lowercased.contains($0) }) {
             return .modifyApp(appId: nil, changes: message)
         }
@@ -46,8 +75,147 @@ class IntentRecognitionService {
     
     // MARK: - Generate App Design from Description
     func generateAppDesign(from description: String, requirements: [String]) async throws -> AppDesign {
+        // Try OpenAI first if available, fallback to local builder
+        if let openAIService = getOpenAIService(), openAIService.hasAPIKey {
+            do {
+                // Generate MiniAppSpec using OpenAI
+                let spec = try await openAIService.generateMiniAppSpec(from: description)
+                // Convert MiniAppSpec to AppDesign
+                return try convertMiniAppSpecToAppDesign(spec, originalDescription: description)
+            } catch {
+                // Fallback to local builder if OpenAI fails
+                print("OpenAI generation failed, falling back to local builder: \(error)")
+            }
+        }
+        
+        // Fallback to local builder
         let sanitized = requirements.isEmpty ? parser.generateFallbackRequirements(from: description) : requirements
         return try designBuilder.buildDesign(description: description, requirements: sanitized)
+    }
+    
+    // MARK: - Generate MiniAppSpec directly (for new flow)
+    func generateMiniAppSpec(from description: String, conversationHistory: [ChatMessage] = []) async throws -> MiniAppSpec {
+        if let openAIService = getOpenAIService(), openAIService.hasAPIKey {
+            return try await openAIService.generateMiniAppSpec(from: description, conversationHistory: conversationHistory)
+        } else {
+            throw IntentRecognitionError.unableToBuildDesign
+        }
+    }
+    
+    // MARK: - Helper Methods
+    private func getOpenAIService() -> OpenAIService? {
+        // Try to get OpenAIService instance
+        // This is a simple approach - in production, use dependency injection
+        return OpenAIService()
+    }
+    
+    private func convertMiniAppSpecToAppDesign(_ spec: MiniAppSpec, originalDescription: String) throws -> AppDesign {
+        // Convert MiniAppSpec pages/components to AppDesign structure
+        guard let firstPage = spec.pages.first else {
+            throw IntentRecognitionError.unableToBuildDesign
+        }
+        
+        let rootComponent = convertPageToAppComponent(page: firstPage)
+        
+        return AppDesign(
+            id: spec.id,
+            name: spec.name,
+            description: spec.description,
+            rootComponent: rootComponent,
+            globalStyles: [:],
+            metadata: AppDesign.AppMetadata(
+                createdAt: spec.createdAt,
+                updatedAt: spec.updatedAt,
+                version: "\(spec.version).0.0",
+                author: "OpenAI Generator"
+            )
+        )
+    }
+    
+    private func convertPageToAppComponent(page: MiniAppPage) -> AppComponent {
+        let children = page.components.map { convertComponent($0) }
+        
+        return AppComponent(
+            type: .container,
+            layout: LayoutProperties(width: 375, height: 812),
+            style: StyleProperties(backgroundColor: "#FFFFFF"),
+            data: ComponentData(),
+            children: children
+        )
+    }
+    
+    private func convertComponent(_ component: MiniAppComponent) -> AppComponent {
+        let type: ComponentType
+        switch component.type {
+        case .container: type = .container
+        case .label: type = .text
+        case .button: type = .button
+        case .input: type = .input
+        case .list: type = .list
+        case .image: type = .image
+        case .spacer: type = .spacer
+        default: type = .container
+        }
+        
+        var data = ComponentData()
+        data.text = component.props.text ?? component.props.label
+        data.placeholder = component.props.placeholder
+        data.imageURL = component.props.imageURL
+        data.items = component.props.items
+        
+        let style = StyleProperties(
+            backgroundColor: component.props.style.backgroundColor,
+            textColor: component.props.style.textColor,
+            fontSize: component.props.style.fontSize,
+            fontWeight: String(component.props.style.fontWeight),
+            fontFamily: "system",
+            borderRadius: component.props.style.cornerRadius,
+            borderWidth: component.props.style.borderWidth,
+            borderColor: component.props.style.borderColor,
+            opacity: 1.0,
+            shadow: nil
+        )
+        
+        let layout = LayoutProperties(
+            width: 343,
+            height: estimateHeight(for: component),
+            padding: EdgeInsets(
+                top: component.props.style.padding,
+                leading: component.props.style.padding,
+                bottom: component.props.style.padding,
+                trailing: component.props.style.padding
+            )
+        )
+        
+        let children = component.children.map { convertComponent($0) }
+        
+        return AppComponent(
+            id: component.id,
+            type: type,
+            layout: layout,
+            style: style,
+            data: data,
+            children: children
+        )
+    }
+    
+    private func estimateHeight(for component: MiniAppComponent) -> Double {
+        switch component.type {
+        case .label:
+            return 40
+        case .button:
+            return 56
+        case .input:
+            return 64
+        case .list:
+            return Double((component.props.items?.count ?? 3) * 50 + 40)
+        case .image:
+            return 200
+        case .spacer:
+            return 16
+        default:
+            return 100
+        }
     }
 }
 
@@ -687,7 +855,7 @@ private struct LocalDesignBuilder {
     }
     
     private func defaultStyles(primary: String) -> [String: StyleProperties] {
-        var button = StyleProperties(
+        let button = StyleProperties(
             backgroundColor: primary,
             textColor: "#FFFFFF",
             fontSize: 18,
@@ -700,7 +868,7 @@ private struct LocalDesignBuilder {
             shadow: StyleProperties.ShadowProperties(color: primary, radius: 16, offsetX: 0, offsetY: 6)
         )
         
-        var text = StyleProperties(
+        let text = StyleProperties(
             backgroundColor: "#F5F7FB",
             textColor: "#0F172A",
             fontSize: 16,
@@ -722,7 +890,7 @@ private struct LocalDesignBuilder {
     // MARK: - Template helper builders
     private func textComponent(_ text: String, yOffset: Double, height: Double, fontSize: Double, fontWeight: String, textColor: String, backgroundColor: String) -> AppComponent {
         let layout = LayoutProperties(x: 16, y: yOffset, width: 343, height: height)
-        var style = StyleProperties(
+        let style = StyleProperties(
             backgroundColor: backgroundColor,
             textColor: textColor,
             fontSize: fontSize,
@@ -741,7 +909,7 @@ private struct LocalDesignBuilder {
     
     private func listComponent(items: [String], yOffset: Double, height: Double, backgroundColor: String) -> AppComponent {
         let layout = LayoutProperties(x: 16, y: yOffset, width: 343, height: height)
-        var style = StyleProperties(
+        let style = StyleProperties(
             backgroundColor: backgroundColor,
             textColor: "#0F172A",
             fontSize: 16,
@@ -779,7 +947,7 @@ private struct LocalDesignBuilder {
     
     private func inputComponent(placeholder: String, yOffset: Double) -> AppComponent {
         let layout = LayoutProperties(x: 16, y: yOffset, width: 343, height: 64)
-        var style = StyleProperties(
+        let style = StyleProperties(
             backgroundColor: "#FFFFFF",
             textColor: "#0F172A",
             fontSize: 16,

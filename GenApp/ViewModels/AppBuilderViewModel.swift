@@ -79,23 +79,24 @@ class AppBuilderViewModel: ObservableObject {
     }
     
     func saveApp() {
-        guard let generatedApp = orchestrator.generatedApp else { return }
+        guard let miniApp = orchestrator.generatedMiniApp else { return }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
         
-        // Convert generated app to Creation
-        let appContent = """
-        {
-            "html": "\(generatedApp.html.replacingOccurrences(of: "\"", with: "\\\""))",
-            "css": "\(generatedApp.css.replacingOccurrences(of: "\"", with: "\\\""))",
-            "javascript": "\(generatedApp.javascript.replacingOccurrences(of: "\"", with: "\\\""))"
+        let content: String
+        if let data = try? encoder.encode(miniApp),
+           let json = String(data: data, encoding: .utf8) {
+            content = json
+        } else {
+            content = "{}"
         }
-        """
         
         let creation = Creation(
             userId: userId,
             title: currentDesign.name,
             description: currentDesign.description,
             type: .app,
-            content: appContent
+            content: content
         )
         
         storageService.saveCreation(creation)

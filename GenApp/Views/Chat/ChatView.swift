@@ -51,7 +51,7 @@ struct ChatView: View {
                                     ToolCallStackView(theme: theme, toolCalls: viewModel.toolCallHistory)
                                         .padding(.bottom, 8)
                                 }
-                            } else if viewModel.builtApp != nil {
+                            } else if viewModel.generatedMiniApp != nil {
                                 PreviewCTAView(
                                     theme: theme,
                                     appName: viewModel.generatedAppDesign?.name ?? "Generated App",
@@ -133,8 +133,8 @@ struct ChatView: View {
         .sheet(isPresented: $viewModel.showAppPreview, onDismiss: {
             viewModel.dismissPreview()
         }) {
-            if let app = viewModel.builtApp {
-                AppPreviewView(app: app, runtimeService: viewModel.runtimeService, theme: theme)
+            if let spec = viewModel.generatedMiniApp {
+                AppPreviewView(spec: spec, runtimeService: viewModel.runtimeService, theme: theme)
             }
         }
         .navigationTitle("Chat")

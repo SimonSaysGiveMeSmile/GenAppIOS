@@ -13,7 +13,7 @@ struct StorageView: View {
     @State private var showCreateSheet = false
     @State private var showAppBuilder = false
     @State private var showAppPreview = false
-    @State private var previewApp: GeneratedApp?
+    @State private var previewApp: MiniAppSpec?
     
     var body: some View {
         NavigationView {
@@ -107,8 +107,8 @@ struct StorageView: View {
                 AppBuilderSheetView(viewModel: viewModel, theme: theme)
             }
             .sheet(isPresented: $showAppPreview) {
-                if let app = previewApp {
-                    AppPreviewView(app: app, runtimeService: AppRuntimeService(), theme: theme)
+                if let spec = previewApp {
+                    AppPreviewView(spec: spec, runtimeService: AppRuntimeService(), theme: theme)
                 }
             }
             .onAppear {
@@ -118,32 +118,66 @@ struct StorageView: View {
     }
     
     private func openAppPreview(creation: Creation) {
-        // Parse the saved app content
-        guard let contentData = creation.content.data(using: .utf8),
-              let contentJSON = try? JSONSerialization.jsonObject(with: contentData) as? [String: Any],
-              let html = contentJSON["html"] as? String,
-              let css = contentJSON["css"] as? String,
-              let js = contentJSON["javascript"] as? String else {
+        guard let spec = decodeMiniApp(from: creation.content, fallbackTitle: creation.title, id: creation.id) else {
             return
         }
         
-        // Reconstruct GeneratedApp
-        let app = GeneratedApp(
-            id: creation.id,
-            name: creation.title,
-            html: html.replacingOccurrences(of: "\\n", with: "\n"),
-            css: css.replacingOccurrences(of: "\\n", with: "\n"),
-            javascript: js.replacingOccurrences(of: "\\n", with: "\n"),
-            metadata: AppDesign.AppMetadata(
-                createdAt: creation.createdAt,
-                updatedAt: creation.updatedAt,
-                version: "1.0.0",
-                author: nil
-            )
-        )
-        
-        previewApp = app
+        previewApp = spec
         showAppPreview = true
+    }
+    
+    private func decodeMiniApp(from content: String, fallbackTitle: String, id: String) -> MiniAppSpec? {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        
+        if let directData = content.data(using: .utf8),
+           let spec = try? decoder.decode(MiniAppSpec.self, from: directData) {
+            return spec
+        }
+        
+        guard let data = content.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        
+        if let miniAppJson = json["miniAppJson"] as? String,
+           let miniAppData = miniAppJson.data(using: .utf8),
+           let spec = try? decoder.decode(MiniAppSpec.self, from: miniAppData) {
+            return spec
+        }
+        
+        // Legacy HTML payloads are no longer supported; wrap them in a placeholder MiniApp
+        if let html = json["html"] as? String {
+            let page = MiniAppPage(
+                id: "legacy-\(id)",
+                title: fallbackTitle,
+                layout: .scroll,
+                components: [
+                    MiniAppComponent(
+                        id: UUID().uuidString,
+                        type: .label,
+                        props: MiniAppComponentProps(
+                            text: "Legacy app preview is no longer supported. Regenerate this idea via Chat.",
+                            style: .defaultStyle
+                        ),
+                        bindings: nil,
+                        actionIds: [],
+                        children: []
+                    )
+                ]
+            )
+            return MiniAppSpec(
+                id: id,
+                ownerId: "legacy",
+                name: fallbackTitle,
+                description: "Legacy HTML artifact length \(html.count)",
+                pages: [page],
+                createdAt: Date(),
+                updatedAt: Date()
+            )
+        }
+        
+        return nil
     }
 }
 
